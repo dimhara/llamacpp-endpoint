@@ -3,45 +3,40 @@ import runpod
 import json
 import asyncio
 from cryptography.fernet import Fernet
-from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams, RequestOutput
+from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
 from vllm.utils import random_uuid
 import utils
 
-# SECURITY KEY
+# CONFIG
 ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
+MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", 100))
 
-# GLOBAL ENGINE INSTANCE
+# GLOBAL ENGINE
 llm_engine = None
 
-def init_engine():
+async def init_engine():
     global llm_engine
-    if llm_engine is not None:
-        return
+    if llm_engine is not None: return
 
     print("--- 🚀 Initializing vLLM Engine ---")
     
-    # 1. Download/Check Models
+    # 1. Prepare Model Path
     model_dir = os.environ.get("MODEL_DIR", "/models")
-    # This ensures the model is downloaded and gets the local path
     model_path = utils.prepare_models(model_dir)
-    
-    if not model_path:
-        # Fallback if MODELS env is empty, try to find a folder in /models
-        subdirs = [f.path for f in os.scandir(model_dir) if f.is_dir()]
-        if subdirs:
-            model_path = subdirs[0]
-        else:
-            raise RuntimeError("No model found in MODELS env var or /models directory")
+    if not model_path: raise RuntimeError("No model path resolved.")
 
-    print(f"Loading model from: {model_path}")
+    # 2. Handle Context Length (FIX for the 2048 vs 4096 error)
+    env_max_len = os.environ.get("MAX_MODEL_LEN")
+    max_model_len = int(env_max_len) if env_max_len else None
 
-    # 2. Configure vLLM
+    # 3. Setup Engine Args
     engine_args = AsyncEngineArgs(
         model=model_path,
         gpu_memory_utilization=float(os.environ.get("GPU_MEMORY_UTILIZATION", "0.95")),
-        max_model_len=int(os.environ.get("MAX_MODEL_LEN", "4096")),
+        max_model_len=max_model_len, # Auto-detects from config.json if None
         dtype="auto",
         enforce_eager=False,
+        max_num_seqs=256,
         disable_log_stats=False
     )
 
@@ -51,83 +46,65 @@ def init_engine():
 async def handler(job):
     global llm_engine
     
-    # 1. DECRYPT PAYLOAD
+    # 1. DECRYPT INPUT
     try:
         if not ENCRYPTION_KEY:
-            yield {"error": "Server ENCRYPTION_KEY not set."}
+            yield {"error": "Server ENCRYPTION_KEY missing."}
             return
         
-        input_payload = job.get('input', {})
-        encrypted_input = input_payload.get('encrypted_input')
+        input_data = job.get('input', {})
+        encrypted_input = input_data.get('encrypted_input')
         
         if not encrypted_input:
-            yield {"error": "No encrypted_input found."}
+            yield {"error": "No encrypted_input provided."}
             return
 
         f = Fernet(ENCRYPTION_KEY.encode())
-        decrypted_json_str = f.decrypt(encrypted_input.encode()).decode()
-        request_data = json.loads(decrypted_json_str)
+        decrypted_json = f.decrypt(encrypted_input.encode()).decode()
+        request_data = json.loads(decrypted_json)
         
     except Exception as e:
-        print(f"Decryption failed: {e}")
-        yield {"error": "Decryption failed or invalid key."}
+        yield {"error": f"Decryption failed: {str(e)}"}
         return
 
-    # 2. PARSE REQUEST
+    # 2. PARSE PROMPT & PARAMS
     prompt = request_data.get("prompt")
     if not prompt:
-        yield {"error": "No prompt provided in encrypted payload."}
+        yield {"error": "No prompt in payload."}
         return
 
-    # Sampling Parameters (with defaults)
     params_dict = request_data.get("sampling_params", {})
-    try:
-        sampling_params = SamplingParams(
-            temperature=params_dict.get("temperature", 0.7),
-            max_tokens=params_dict.get("max_tokens", 512),
-            top_p=params_dict.get("top_p", 1.0),
-            presence_penalty=params_dict.get("presence_penalty", 0.0),
-            frequency_penalty=params_dict.get("frequency_penalty", 0.0),
-            stop=params_dict.get("stop", [])
-        )
-    except Exception as e:
-        yield {"error": f"Invalid sampling parameters: {str(e)}"}
-        return
+    sampling_params = SamplingParams(
+        temperature=params_dict.get("temperature", 0.7),
+        max_tokens=params_dict.get("max_tokens", 512),
+        top_p=params_dict.get("top_p", 1.0),
+        stop=params_dict.get("stop", [])
+    )
 
     request_id = random_uuid()
     
-    # 3. GENERATE & STREAM
+    # 3. GENERATE & STREAM (Continuous Batching enabled via shared engine)
     try:
-        # Initiate generation
         results_generator = llm_engine.generate(prompt, sampling_params, request_id)
-
-        # Track previous text to send only deltas (streaming)
         previous_text = ""
         
         async for request_output in results_generator:
-            # vLLM returns the full generated text every time
             full_text = request_output.outputs[0].text
-            
-            # Calculate delta
             delta = full_text[len(previous_text):]
             previous_text = full_text
-            
-            # Yield token/chunk
-            # Note: We are streaming CLEAR TEXT back. 
-            # Encrypting individual tokens is inefficient and usually unnecessary 
-            # if the transport (HTTPS) is secure, but the prompt (input) remains protected.
             yield delta
 
     except Exception as e:
-        print(f"Generation Error: {e}")
         yield {"error": str(e)}
 
-# Initialize Engine immediately on import/start
+
+# 1. Initialize the engine
 loop = asyncio.get_event_loop()
 loop.run_until_complete(init_engine())
 
-# Start RunPod
-runpod.serverless.start({
-    "handler": handler,
-    "return_aggregate_stream": True # This is crucial for streaming
-})
+if __name__ == "__main__":
+    runpod.serverless.start({
+        "handler": handler,
+        "concurrency_modifier": lambda x: MAX_CONCURRENCY,
+        "return_aggregate_stream": True
+    })
