@@ -19,9 +19,9 @@ def init_engine():
     print("--- 🚀 Initializing llama.cpp Secure Worker ---")
     model_dir = os.environ.get("MODEL_DIR", "/models")
     
-    # DeepSeek R1 Distill-Qwen models use the Qwen/ChatML logic.
-    # If CHAT_FORMAT is not provided, we default to 'qwen'.
-    requested_format = os.environ.get("CHAT_FORMAT", "qwen") 
+    # Passing None allows the library to use the embedded GGUF Jinja template.
+    # This is the most accurate for DeepSeek-R1 Distills.
+    requested_format = os.environ.get("CHAT_FORMAT") 
 
     try:
         model_path = utils.prepare_models(model_dir)
@@ -32,25 +32,15 @@ def init_engine():
             n_gpu_layers=-1, 
             n_ctx=max_ctx,
             flash_attn=ENABLE_FLASH_ATTN,
-            chat_format=requested_format,
+            chat_format=requested_format, 
             verbose=False
         )
-
-        ctx_val = llm.n_ctx() if callable(llm.n_ctx) else llm.n_ctx
-        print(f"--- 🛠️  Model Metadata & Config ---")
-        print(f"   - Model File:     {os.path.basename(model_path)}")
-        print(f"   - Context Window:  {ctx_val} tokens")
-        print(f"   - Chat Format:     {requested_format}")
-        print(f"   - Flash Attn:      {'ENABLED' if ENABLE_FLASH_ATTN else 'DISABLED'}")
-        print(f"--- ✅ Engine Ready ---")
-
+        print(f"--- ✅ Engine Ready (Format: {llm.chat_format}) ---")
     except Exception as e:
-        print(f"--- ❌ Engine Initialization Failed ---")
-        traceback.print_exc()
+        print(f"--- ❌ Engine Initialization Failed: {e}")
         raise e
 
 def handler(job):
-    # 1. DECRYPT
     try:
         if not ENCRYPTION_KEY:
             yield {"error": "Server ENCRYPTION_KEY missing."}
@@ -63,17 +53,12 @@ def handler(job):
         decrypted_json = f.decrypt(encrypted_input.encode()).decode()
         request_data = json.loads(decrypted_json)
     except Exception as e:
-        yield {"error": f"Decryption/Parsing failed: {str(e)}"}
+        yield {"error": f"Decryption failed: {str(e)}"}
         return
 
-    # 2. PREPARE
     messages = request_data.get("messages", [])
-    if not messages and "prompt" in request_data:
-        messages = [{"role": "user", "content": request_data["prompt"]}]
-
     params = request_data.get("sampling_params", {})
 
-    # 3. GENERATE & STREAM
     try:
         stream = llm.create_chat_completion(
             messages=messages,
@@ -82,34 +67,23 @@ def handler(job):
             stream=True
         )
 
-        print("--- ⚡ Generation Started ---")
-        token_count = 0
-        
         for chunk in stream:
             if 'choices' in chunk and len(chunk['choices']) > 0:
                 delta = chunk['choices'][0]['delta']
                 
-                # FIX: Check both 'content' (final answer) and 'reasoning_content' (thinking)
-                # DeepSeek-R1 Distills generate reasoning first.
+                # Check for content or reasoning
                 token = delta.get('content') or delta.get('reasoning_content')
                 
                 if token:
-                    token_count += 1
-                    # Optional: Print heartbeat every 50 tokens to keep logs clean
-                    if token_count % 50 == 0:
-                        print(f"--- 💓 Generated {token_count} tokens ---")
-                    yield token
-        
-        print(f"--- ✨ Generation Finished (Total tokens: {token_count}) ---")
-        
-        if token_count == 0:
-            yield " " # Prevent empty return if model yielded nothing
+                    # Ensure we only yield strings, never lists
+                    if isinstance(token, list):
+                        yield "".join(token)
+                    else:
+                        yield str(token)
 
     except Exception as e:
-        print(f"Inference error: {str(e)}")
         yield {"error": f"Inference failed: {str(e)}"}
 
-# Trigger eager load
 init_engine()
 
 if __name__ == "__main__":
