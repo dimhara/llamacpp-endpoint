@@ -1,106 +1,83 @@
-# llama.cpp Secure Worker
+# llama.cpp Secure Worker (v2025)
 
-A high-performance, security-focused serverless worker for [llama.cpp](https://github.com/ggerganov/llama.cpp) (via `llama-cpp-python`) optimized for RunPod.
+A high-performance, privacy-first serverless worker for [llama.cpp](https://github.com/ggerganov/llama.cpp) optimized for RunPod. This worker is designed for **low-latency cold starts** and **zero-disk data handling**.
 
-This worker provides **low-latency cold starts** and **strict privacy**. It is designed for "the odd query" where vLLM's heavy initialization and massive VRAM pre-allocation are overkill.
-
-## 🚀 Features
-*   **Flash Attention**: Enabled by default for massive speed boosts on Ampere+ GPUs (A10, A100, RTX 30/40).
-*   **Native Jinja2 Templates**: Automatically uses the official chat template embedded in the GGUF file (supports Llama 3.x, Qwen 2.5, DeepSeek R1, etc.).
-*   **OpenAI Schema**: Fully supports the `messages` array (System/User/Assistant) natively.
-*   **Dual Mode**: Switch between a Secure Serverless Worker and a standard OpenAI-compatible API server.
+## 🚀 2025 Features
+*   **Encrypted Logic**: Payloads are encrypted locally via **AES-128 (Fernet)**. Decryption happens strictly in the Pod's RAM.
+*   **DeepSeek-R1 Native**: Supports the new `reasoning_content` field to capture and stream "Chain of Thought" tokens.
+*   **Flash Attention**: Pre-compiled with FA support for massive speed boosts on Ampere+ GPUs (A10, A100, RTX 30/40 series).
+*   **Auto-Jinja Templates**: Automatically resolves official chat templates (Llama 3, Qwen 2.5, DeepSeek) from model metadata.
 
 ---
 
-## 🔒 Security & Privacy Model
+## 🛠️ Configuration (Environment Variables)
 
-*   **End-to-End Prompt Encryption**: Payloads (prompts, history, and images) are encrypted via **Fernet (AES-128)** on the client. The worker decrypts them strictly in RAM.
-*   **Zero-Disk Footprint**: 
-    - Prompts and multimodal data are never written to `/tmp` or persistent storage.
-    - Model contexts are wiped upon Serverless instance termination.
-*   **Encrypted Transport**: Layered protection using HTTPS + symmetric payload encryption.
-
----
-
-## 🛠️ Operating Modes
-
-| Mode | Environment Variable | Use Case |
-| :--- | :--- | :--- |
-| **Secure Worker** | `RUN_MODE=SECURE_WORKER` (Default) | **Serverless.** Cold starts in < 3s. Requires Fernet decryption by the client. |
-| **OpenAI Server** | `RUN_MODE=OPENAI_SERVER` | **Full Pod.** Connect directly to third-party tools (SillyTavern, etc.) on port 8000. |
+| Variable | Description | Default | Example |
+| :--- | :--- | :--- | :--- |
+| `MODELS` | **Required.** Format: `repo_id:filename` | - | `unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF:DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf` |
+| `ENCRYPTION_KEY` | **Required.** 32-byte URL-safe base64 key. | - | `Generate using the command below.` |
+| `RUN_MODE` | `SECURE_WORKER` or `OPENAI_SERVER`. | `SECURE_WORKER` | `SECURE_WORKER` |
+| `CHAT_FORMAT` | Chat handler logic. | `jinja` | `jinja`, `qwen`, `llama-3`, `chatml` |
+| `MAX_MODEL_LEN` | Context window size (tokens). | `4096` | `8192` |
+| `ENABLE_FLASH_ATTN` | Enable Flash Attention (Requires Ampere+). | `false` | `true` |
+| `LISTEN_ADDR` | IP for `OPENAI_SERVER` mode. | `127.0.0.1` | `0.0.0.0` (for public access) |
+| `API_KEY` | Optional auth key for `OPENAI_SERVER`. | - | `your-secret-api-key` |
 
 ---
 
-## 1. Setup & Configuration
+## 🔒 Security Modes
 
-### Environment Variables
+### 1. Secure Worker (Serverless Mode)
+This mode is designed for maximum privacy. It uses RunPod's Serverless infrastructure to scale to zero when not in use.
+*   **How it works**: You encrypt your prompt + history locally. The worker decrypts it in RAM, generates a response, and sends it back. 
+*   **Benefit**: Cleartext data never exists on RunPod's persistent storage.
+*   **Usage**: Set `RUN_MODE=SECURE_WORKER`. Use `client.py` to talk to it.
 
-| Variable | Description | Example |
-| :--- | :--- | :--- |
-| `MODELS` | **Required.** Format: `repo_id:filename` | `unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF:DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf` |
-| `ENCRYPTION_KEY` | **Required for Secure Worker.** | Generate using the snippet below. |
-| `MAX_MODEL_LEN` | Context window size (tokens). | `4096` (Default: 4096) |
-| `RUN_MODE` | Switch between `SECURE_WORKER` and `OPENAI_SERVER`. | `SECURE_WORKER` |
-| `CHAT_FORMAT` | Chat template logic for server. | `qwen` (for DeepSeek R1), `llama-3` (for Llama 3), `chatml` (default) |
+### 2. OpenAI Server (Full Pod Mode)
+This mode transforms the pod into a standard OpenAI-compatible API.
+*   **How it works**: Launches the `llama_cpp.server` module.
+*   **Security (Local-Only)**: By default, it binds to `127.0.0.1`. You must use an **SSH Tunnel** to access it.
+*   **Usage**: 
+    1. Set `RUN_MODE=OPENAI_SERVER` and `LISTEN_ADDR=127.0.0.1`.
+    2. From your local terminal, run: `ssh -L 8000:127.0.0.1:8000 -p [POD_SSH_PORT] root@[POD_IP]`
+    3. Access your API locally at `http://localhost:8000/v1`.
 
+---
 
+## 📦 Setup Instructions
 
-
-
-### Generate your Encryption Key
+### 1. Generate Encryption Key
+Before deploying, generate your AES-128 key:
 ```bash
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
----
+### 2. Deployment
+*   **Fat Image Option**: To eliminate download time during cold starts, use a `Dockerfile` that starts `FROM` this image and runs `python3 utils.py /models` to "bake" the model into the container.
+*   **RunPod Volume**: Alternatively, mount a RunPod Network Volume to `/models` to cache the GGUF file across pod restarts.
 
-## 2. Deployment
-
-### Building the Image
-The Dockerfile uses **CUDA 12.4** and compiles `llama-cpp-python` with **Flash Attention** support.
-
+### 3. Client Usage
+Update your environment variables and run the interactive chat:
 ```bash
-docker build -t your-username/llama-cpp-secure-worker:latest .
-docker push your-username/llama-cpp-secure-worker:latest
-```
+export RUNPOD_API_KEY="your_key"
+export RUNPOD_ENDPOINT_ID="your_id"
+export ENCRYPTION_KEY="your_aes_key"
 
-### RunPod Settings
-*   **Container Image**: `your-username/llama-cpp-secure-worker:latest`
-*   **Container Disk**: 20GB+ (depending on model size).
-*   **GPU**: Requires NVIDIA GPU. Ampere or newer recommended for Flash Attention.
-
----
-
-## 3. Usage
-
-### Local Testing (Within a Pod)
-To verify the engine, encryption, and Jinja templates are working:
-```bash
-export MODELS="Qwen/Qwen2.5-0.5B-Instruct-GGUF:qwen2.5-0.5b-instruct-q4_k_m.gguf"
-export ENCRYPTION_KEY="your-key-here"
-
-python3 test_local.py --prompt "Why is llama.cpp faster for cold starts than vLLM?"
-```
-
-### Secure Remote Client
-Update `client.py` with your `ENDPOINT_ID`, `API_KEY`, and `ENCRYPTION_KEY`.
-```bash
-python client.py -p "Compare GGUF vs Safetensors."
+python3 client.py --system "You are a private assistant. Reason in English."
 ```
 
 ---
 
 ## ⚡ Performance Tips
-
-1.  **GGUF Quantization**: Use `Q4_K_M` or `IQ4_XS` for the best balance of speed and intelligence.
-2.  **RunPod Volume**: In RunPod Endpoint settings, set the **Model** field to the Hugging Face repo ID. This mounts the model cache to `/runpod-volume/`, skipping the download step for future cold starts.
-3.  **VRAM Offloading**: The worker is pre-configured with `n_gpu_layers=-1` to offload the entire model to the GPU for maximum speed.
+1.  **Quantization**: Use `Q4_K_M` or `IQ4_XS` GGUF files for the best performance/quality ratio.
+2.  **GPU Layers**: This worker is configured to offload **all layers** (`-1`) to the GPU by default.
+3.  **DeepSeek-R1**: Small distilled models (1.5B/7B) generate "Reasoning" tokens before the final answer. **Always set `max_tokens` to at least 1024** in your client to ensure the model doesn't cut off during its thinking phase.
 
 ---
 
 ## 🛠️ Project Structure
-*   `rp_handler.py`: RunPod entry point. Decrypts input in RAM and uses `create_chat_completion`.
+*   `rp_handler.py`: RunPod entry point. Decrypts in RAM and handles `reasoning_content`.
 *   `utils.py`: Fast model downloader using `hf_transfer`.
-*   `client.py`: Reference client implementing Fernet encryption and OpenAI schema.
-*   `start.sh`: Mode-switcher (Secure Worker vs OpenAI Server).
-*   `Dockerfile`: Optimized for NVIDIA CUDA 12.4 + Flash Attention.
+*   `client.py`: Reference client implementing Fernet encryption and RunPod stream parsing.
+*   `start.sh`: Mode-switcher logic.
+*   `Dockerfile`: Multi-stage build optimized for CUDA 12.4.
