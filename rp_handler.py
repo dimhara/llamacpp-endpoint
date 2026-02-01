@@ -12,6 +12,7 @@ ENABLE_FLASH_ATTN = os.environ.get("ENABLE_FLASH_ATTN", "false").lower() == "tru
 
 llm = None
 
+
 def init_engine():
     global llm
     if llm is not None: return
@@ -19,9 +20,9 @@ def init_engine():
     print("--- 🚀 Initializing llama.cpp Secure Worker ---")
     model_dir = os.environ.get("MODEL_DIR", "/models")
     
-    # Passing None allows the library to use the embedded GGUF Jinja template.
-    # This is the most accurate for DeepSeek-R1 Distills.
-    requested_format = os.environ.get("CHAT_FORMAT") 
+    # CHANGE: Default to "jinja" instead of None. 
+    # "jinja" forces the engine to use the template found inside the GGUF file.
+    requested_format = os.environ.get("CHAT_FORMAT", "jinja") 
 
     try:
         model_path = utils.prepare_models(model_dir)
@@ -32,12 +33,27 @@ def init_engine():
             n_gpu_layers=-1, 
             n_ctx=max_ctx,
             flash_attn=ENABLE_FLASH_ATTN,
-            chat_format=requested_format, 
+            chat_format=requested_format, # This will now use the embedded Jinja
             verbose=False
         )
-        print(f"--- ✅ Engine Ready (Format: {llm.chat_format}) ---")
+
+        ctx_val = llm.n_ctx() if callable(llm.n_ctx) else llm.n_ctx
+        
+        # This will now likely show 'jinja' or the resolved name
+        print(f"--- 🛠️  Model Metadata & Config ---")
+        print(f"   - Model File:     {os.path.basename(model_path)}")
+        print(f"   - Context Window:  {ctx_val} tokens")
+        print(f"   - Chat Format:     {llm.chat_format}") 
+        print(f"   - Flash Attn:      {'ENABLED' if ENABLE_FLASH_ATTN else 'DISABLED'}")
+        print(f"--- ✅ Engine Ready (RAM-only Decryption Active) ---")
+
     except Exception as e:
         print(f"--- ❌ Engine Initialization Failed: {e}")
+        # Fallback logic: If 'jinja' fails (old models), try None (default)
+        if requested_format == "jinja":
+            print("--- ⚠️  Jinja template failed, retrying with default... ---")
+            os.environ["CHAT_FORMAT"] = "" # Clear it for the next attempt or logic
+        traceback.print_exc()
         raise e
 
 def handler(job):
