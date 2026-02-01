@@ -41,6 +41,11 @@ This worker provides **low-latency cold starts** and **strict privacy**. It is d
 | `ENCRYPTION_KEY` | **Required for Secure Worker.** | Generate using the snippet below. |
 | `MAX_MODEL_LEN` | Context window size (tokens). | `4096` (Default: 4096) |
 | `RUN_MODE` | Switch between `SECURE_WORKER` and `OPENAI_SERVER`. | `SECURE_WORKER` |
+| `CHAT_FORMAT` | Chat template logic for server. | `qwen` (for DeepSeek R1), `llama-3` (for Llama 3), `chatml` (default) |
+
+
+
+
 
 ### Generate your Encryption Key
 ```bash

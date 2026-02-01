@@ -58,6 +58,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     libgomp1 \
     curl \
+    openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Copy the virtual environment from the builder stage
@@ -69,4 +70,6 @@ COPY . .
 RUN chmod +x start.sh
 
 # 4. Entrypoint
-ENTRYPOINT ["/bin/bash", "/app/start.sh"]
+# Use an empty ENTRYPOINT to ensure CMD has full control -- allows override from runpod
+ENTRYPOINT []
+CMD ["/bin/bash", "/app/start.sh"]
