@@ -39,13 +39,14 @@ python3 utils.py "$MODEL_DIR"
 # 2. Select Mode
 if [ "$RUN_MODE" = "OPENAI_SERVER" ]; then
     echo "--- Launching Direct Native API (Localhost for SSH Tunneling) ---"
-    # Bind to 127.0.0.1 for SSH tunneling security as requested
     llama-server \
         --model "$MODEL_DIR"/*.gguf \
         --host 127.0.0.1 \
         --port 8000 \
         --n-gpu-layers -1 \
-        --chat-template auto
+        --jinja \
+        --chat-template auto \
+        --reasoning-format deepseek
 else
     echo "--- Launching Secure Serverless Proxy ---"
     python3 -u rp_handler_fork.py

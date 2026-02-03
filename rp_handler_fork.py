@@ -21,7 +21,7 @@ def start_llama_server():
     
     model_path = utils.prepare_models(os.environ.get("MODEL_DIR", "/models"))
     
-    # Standard C++ binary flags
+    # Standard C++ binary flags - Architecture Agnostic
     cmd = [
         "llama-server",
         "--model", model_path,
@@ -29,7 +29,9 @@ def start_llama_server():
         "--n-gpu-layers", "-1",
         "--host", "127.0.0.1",
         "--port", "8080",
-        "--chat-template", "auto" # The binary handles 'auto' much better
+        "--jinja",                        # Use the modern internal Jinja engine
+        "--chat-template", "auto",        # Rely on GGUF metadata
+        "--reasoning-format", "deepseek"  # Handle CoT fields natively
     ]
     
     llama_process = subprocess.Popen(cmd)

@@ -21,11 +21,11 @@ FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 1. Install Python & Utils
-RUN apt-get update && apt-get install -y python3 python3-pip curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y python3 python3-pip curl openssh-server && rm -rf /var/lib/apt/lists/*
 RUN pip3 install --no-cache-dir runpod cryptography requests huggingface_hub hf_transfer
 
 # 2. Copy the compiled binary
-COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY --from=builder /llama.cpp/build/bin/* /usr/local/bin/*
 
 # 3. Copy ALL required Shared Libraries
 COPY --from=builder /llama.cpp/build/bin/*.so /usr/local/lib/
