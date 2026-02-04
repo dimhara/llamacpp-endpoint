@@ -1,6 +1,6 @@
-# 1. Start from your previously built logic image
-FROM ghcr.io/dimhara/llamacpp-endpoint:latest
-
+# 1. 
+# USES HARDCODED IMAGE TO AVOID CACHING 
+FROM ghcr.io/dimhara/llamacpp-endpoint:python-3cf5657
 # 2. Define the model to bake in at build time
 # RunPod allows passing build arguments, or you can hardcode it here.
 ARG BAKE_MODELS="DavidAU/OpenAi-GPT-oss-20b-abliterated-uncensored-NEO-Imatrix-gguf:OpenAI-20B-NEO-CODEPlus-Uncensored-IQ4_NL.gguf"
